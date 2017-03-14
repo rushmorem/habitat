@@ -17,7 +17,6 @@ pub mod handlers;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
-use dbcache::data_store::Pool;
 use hab_net::{Application, Supervisor};
 use hab_net::dispatcher::prelude::*;
 use hab_net::oauth::github::GitHubClient;
@@ -33,17 +32,26 @@ const BE_LISTEN_ADDR: &'static str = "inproc://backend";
 
 #[derive(Clone)]
 pub struct ServerState {
-    datastore: Arc<Box<DataStore>>,
+    datastore: DataStore,
     github: Arc<Box<GitHubClient>>,
     admin_team: u64,
+    builder_teams: Arc<Vec<u64>>,
+    build_worker_teams: Arc<Vec<u64>>,
 }
 
 impl ServerState {
-    pub fn new(datastore: DataStore, gh: GitHubClient, team: u64) -> Self {
+    pub fn new(datastore: DataStore,
+               gh: GitHubClient,
+               team: u64,
+               builder_teams: Vec<u64>,
+               build_worker_teams: Vec<u64>)
+               -> Self {
         ServerState {
-            datastore: Arc::new(Box::new(datastore)),
+            datastore: datastore,
             github: Arc::new(Box::new(gh)),
             admin_team: team,
+            builder_teams: Arc::new(builder_teams),
+            build_worker_teams: Arc::new(build_worker_teams),
         }
     }
 }
@@ -75,10 +83,7 @@ impl Dispatcher for Worker {
                 -> Result<()> {
         match message.message_id() {
             "AccountGet" => handlers::account_get(message, sock, state),
-            "AccountSearch" => handlers::account_search(message, sock, state),
-            "GrantFlagToTeam" => handlers::grant_flag(message, sock, state),
-            "ListFlagGrants" => handlers::grant_list(message, sock, state),
-            "RevokeFlagFromTeam" => handlers::revoke_flag(message, sock, state),
+            "AccountGetId" => handlers::account_get_id(message, sock, state),
             "SessionCreate" => handlers::session_create(message, sock, state),
             "SessionGet" => handlers::session_get(message, sock, state),
             _ => panic!("unhandled message"),
@@ -128,14 +133,19 @@ impl Application for Server {
 
     fn run(&mut self) -> Result<()> {
         try!(self.be_sock.bind(BE_LISTEN_ADDR));
-        let (datastore, gh, admin_team) = {
+        let (datastore, gh, admin_team, builder_teams, build_worker_teams) = {
             let cfg = self.config.read().unwrap();
-            let ds = DataStore::start(cfg.deref());
+            let ds = DataStore::new(cfg.deref())?;
             let gh = GitHubClient::new(cfg.deref());
-            (ds, gh, cfg.github_admin_team)
+            (ds,
+             gh,
+             cfg.github_admin_team,
+             cfg.github_builder_teams.clone(),
+             cfg.github_build_worker_teams.clone())
         };
         let cfg = self.config.clone();
-        let init_state = ServerState::new(datastore, gh, admin_team);
+        let init_state =
+            ServerState::new(datastore, gh, admin_team, builder_teams, build_worker_teams);
         let sup: Supervisor<Worker> = Supervisor::new(cfg, init_state);
         try!(sup.start());
         try!(self.connect());

@@ -287,7 +287,6 @@ pub struct RouteConn {
     pub ident: String,
     pub socket: zmq::Socket,
     pub heartbeat: zmq::Socket,
-    hasher: FnvHasher,
 }
 
 impl RouteConn {
@@ -301,7 +300,6 @@ impl RouteConn {
                ident: ident,
                socket: socket,
                heartbeat: heartbeat,
-               hasher: FnvHasher::default(),
            })
     }
 
@@ -322,7 +320,7 @@ impl RouteConn {
     }
 
     pub fn route<M: Routable>(&mut self, msg: &M) -> Result<()> {
-        let route_hash = msg.route_key().map(|key| key.hash(&mut self.hasher));
+        let route_hash = msg.route_key().map(|key| key.hash(&mut FnvHasher::default()));
         let req = protocol::Message::new(msg).routing(route_hash).build();
         let bytes = try!(req.write_to_bytes());
         try!(self.socket.send(&bytes, 0));
